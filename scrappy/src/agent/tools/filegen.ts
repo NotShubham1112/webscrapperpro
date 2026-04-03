@@ -20,24 +20,25 @@ import { colors } from '../../utils/colors';
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
 
-const HOME = os.homedir();
-const SCRAPPY_OUTPUT = path.join(HOME, '.scrappy', 'output');
-
 function ensureDir(dirPath: string): void {
+  if (!dirPath) return;
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
 }
 
-function resolveFolder(folderName: string): string {
-  const folderPath = path.join(SCRAPPY_OUTPUT, folderName.trim());
-  ensureDir(folderPath);
-  return folderPath;
-}
-
-function resolveFile(folderPath: string, fileName: string, ext: string): string {
-  const base = fileName.trim().replace(/\.[a-z]+$/i, ''); // strip existing ext
-  return path.join(folderPath, `${base}.${ext}`);
+/** 
+ * Resolves a path relative to the provided base or Default output.
+ */
+function resolvePath(userPath: string, fileName: string, ext?: string): string {
+  const targetExt = ext ? `.${ext.replace(/^\./, '')}` : '';
+  const finalName = fileName.endsWith(targetExt) ? fileName : `${fileName}${targetExt}`;
+  
+  if (path.isAbsolute(userPath)) {
+    return path.join(userPath, finalName);
+  }
+  
+  return path.join(process.cwd(), userPath, finalName);
 }
 
 // ─── E) create_output_folder ─────────────────────────────────────────────────
@@ -59,23 +60,18 @@ export async function create_output_folder(args: {
   }
 
   try {
-    const folderPath = resolveFolder(folderName);
-    console.log(colors.success(`[filegen] Created folder: ${folderPath}`));
+    const folderPath = path.isAbsolute(folderName) ? folderName : path.join(process.cwd(), folderName);
+    ensureDir(folderPath);
     return { success: true, data: { path: folderPath } };
   } catch (err: any) {
     return { success: false, error: err?.message ?? 'Failed to create output folder.' };
   }
 }
 
-// ─── E) create_excel ────────────────────────────────────────────────────────
+// ─── F) create_excel ────────────────────────────────────────────────────────
 
 /**
  * create_excel — Generates a styled .xlsx workbook.
- *
- * Expects `rows` to be an array of plain objects.
- * Column headers are auto-derived from object keys.
- * The sheet is auto-sized, header row is bold + blue,
- * data rows are alternating-light, and a metadata footer is added.
  */
 export async function create_excel(args: {
   folderName: string;
@@ -99,8 +95,8 @@ export async function create_excel(args: {
   }
 
   try {
-    const folderPath = resolveFolder(folderName);
-    const filePath = resolveFile(folderPath, fileName, 'xlsx');
+    const filePath = resolvePath(folderName, fileName, 'xlsx');
+    ensureDir(path.dirname(filePath));
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Scrappy — Cosmic CLI Agent';
@@ -108,70 +104,103 @@ export async function create_excel(args: {
 
     const ws = wb.addWorksheet('Scrappy Data');
 
-    // ── Derive columns from first row keys ──
+    // ── Derive columns ──
     const headers = Object.keys(rows[0]);
 
-    ws.columns = headers.map((h) => ({
+    // Calculate dynamic widths
+    const colWidths = headers.map(h => {
+      let maxLen = h.length;
+      rows.forEach(row => {
+        const val = String(row[h] || '');
+        if (val.length > maxLen) maxLen = val.length;
+      });
+      return Math.min(Math.max(maxLen + 4, 12), 50);
+    });
+
+    ws.columns = headers.map((h, i) => ({
       header: h,
       key: h,
-      width: Math.max(h.length + 4, 16),
+      width: colWidths[i],
     }));
 
-    // ── Style header row (Cosmic blue) ──
+    // ── Style header row ──
     const headerRow = ws.getRow(1);
-    headerRow.height = 24;
+    headerRow.height = 28;
     headerRow.eachCell((cell) => {
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FF3B82F6' },      // Cosmic bright blue
+        fgColor: { argb: 'FF2563EB' },
       };
       cell.font = {
         bold: true,
         color: { argb: 'FFFFFFFF' },
-        size: 12,
+        size: 13,
       };
       cell.alignment = {
         vertical: 'middle',
         horizontal: 'center',
       };
       cell.border = {
-        top:    { style: 'thin', color: { argb: 'FF1E40AF' } },
-        bottom: { style: 'thin', color: { argb: 'FF1E40AF' } },
-        left:   { style: 'thin', color: { argb: 'FF1E40AF' } },
-        right:  { style: 'thin', color: { argb: 'FF1E40AF' } },
+        top:    { style: 'medium', color: { argb: 'FF1E40AF' } },
+        bottom: { style: 'medium', color: { argb: 'FF1E40AF' } },
+        left:   { style: 'medium', color: { argb: 'FF1E40AF' } },
+        right:  { style: 'medium', color: { argb: 'FF1E40AF' } },
       };
     });
 
-    // ── Freeze & add data rows ──
+    // ── Add and format data rows ──
     ws.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
 
     rows.forEach((rowData, i) => {
       const row = ws.addRow(rowData);
-      row.eachCell((cell) => {
+      row.height = 20;
+
+      row.eachCell((cell, colNum) => {
+        const val = cell.value;
+
+        // Style
         cell.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: i % 2 === 0 ? 'FFFAFAFA' : 'FFEFF6FF' },
+          fgColor: { argb: i % 2 === 0 ? 'FFF9FAFB' : 'FFFFFFFF' },
         };
+        
         cell.border = {
-          top:    { style: 'hair', color: { argb: 'FFD1D5DB' } },
-          bottom: { style: 'hair', color: { argb: 'FFD1D5DB' } },
-          left:   { style: 'hair', color: { argb: 'FFD1D5DB' } },
-          right:  { style: 'hair', color: { argb: 'FFD1D5DB' } },
+          top:    { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          left:   { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          right:  { style: 'thin', color: { argb: 'FFE5E7EB' } },
         };
+
+        // Automatic alignment & type conversion
+        if (typeof val === 'string') {
+          // Clean currency/numeric strings
+          const cleanVal = val.replace(/[$,\s]/g, '');
+          if (cleanVal !== '' && !isNaN(Number(cleanVal))) {
+            cell.value = Number(cleanVal);
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            if (val.includes('$')) {
+              cell.numFmt = '"$"#,##0.00';
+            }
+          } else {
+            cell.alignment = { horizontal: 'left', vertical: 'middle' };
+          }
+        } else if (typeof val === 'number') {
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        } else {
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
       });
     });
 
-    // ── Footer metadata ──
+    // ── Footer ──
     const lastRowNum = (ws.lastRow?.number ?? 1) + 2;
-    ws.getCell(`A${lastRowNum}`).value =
-      `Generated by Scrappy — Cosmic CLI Agent | ${new Date().toLocaleString()}`;
-    ws.getCell(`A${lastRowNum}`).font = {
-      italic: true,
-      color: { argb: 'FF9CA3AF' },
-      size: 10,
-    };
+    ws.mergeCells(`A${lastRowNum}:${String.fromCharCode(65 + headers.length - 1)}${lastRowNum}`);
+    const footerCell = ws.getCell(`A${lastRowNum}`);
+    footerCell.value = `Generated by Scrappy — Cosmic CLI Agent | ${new Date().toLocaleString()}`;
+    footerCell.font = { italic: true, color: { argb: 'FF6B7280' }, size: 10 };
+    footerCell.alignment = { horizontal: 'center' };
 
     await wb.xlsx.writeFile(filePath);
     console.log(colors.success(`[filegen] Excel saved: ${filePath}`));
@@ -181,7 +210,7 @@ export async function create_excel(args: {
   }
 }
 
-// ─── F) create_markdown ──────────────────────────────────────────────────────
+// ─── G) create_markdown ──────────────────────────────────────────────────────
 
 /**
  * create_markdown — Writes a markdown file (README.md or any .md).
@@ -208,8 +237,8 @@ export async function create_markdown(args: {
   }
 
   try {
-    const folderPath = resolveFolder(folderName);
-    const filePath = resolveFile(folderPath, fileName, 'md');
+    const filePath = resolvePath(folderName, fileName, 'md');
+    ensureDir(path.dirname(filePath));
 
     fs.writeFileSync(filePath, content, 'utf-8');
     console.log(colors.success(`[filegen] Markdown saved: ${filePath}`));
@@ -219,17 +248,10 @@ export async function create_markdown(args: {
   }
 }
 
-// ─── G) create_docx ──────────────────────────────────────────────────────────
+// ─── H) create_docx ──────────────────────────────────────────────────────────
 
 /**
- * Minimal markdown-lite parser → docx Paragraphs.
- * Supports:
- *   # Title       → Heading 1, centered
- *   ## Heading    → Heading 2
- *   ### Sub       → Heading 3
- *   - bullet      → bullet list
- *   **bold**      → inline bold runs
- *   blank line    → empty paragraph
+ * Advanced Word Paragraph generator.
  */
 function parseDocxContent(text: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
@@ -237,57 +259,105 @@ function parseDocxContent(text: string): Paragraph[] {
   for (const raw of text.split('\n')) {
     const line = raw.trimEnd();
 
-    if (/^###\s/.test(line)) {
-      paragraphs.push(
-        new Paragraph({
-          text: line.replace(/^###\s/, ''),
-          heading: HeadingLevel.HEADING_3,
-          spacing: { before: 200, after: 100 },
-        })
-      );
-    } else if (/^##\s/.test(line)) {
-      paragraphs.push(
-        new Paragraph({
-          text: line.replace(/^##\s/, ''),
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 120 },
-        })
-      );
-    } else if (/^#\s/.test(line)) {
-      paragraphs.push(
-        new Paragraph({
-          text: line.replace(/^#\s/, ''),
-          heading: HeadingLevel.HEADING_1,
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 300, after: 200 },
-        })
-      );
-    } else if (/^[-*]\s/.test(line)) {
-      paragraphs.push(
-        new Paragraph({
-          text: line.replace(/^[-*]\s/, ''),
-          bullet: { level: 0 },
-          spacing: { after: 60 },
-        })
-      );
-    } else if (line.trim() === '') {
-      paragraphs.push(new Paragraph({ text: '' }));
-    } else {
-      // Inline **bold**
-      const parts = line.split(/\*\*(.+?)\*\*/g);
-      const runs: TextRun[] = parts.map((part, i) =>
-        new TextRun({ text: part, bold: i % 2 === 1 })
-      );
-      paragraphs.push(
-        new Paragraph({
-          children: runs,
-          spacing: { after: 120 },
-        })
-      );
+    // 1. Headings
+    if (/^#\s/.test(line)) {
+      paragraphs.push(new Paragraph({
+        text: line.replace(/^#\s/, ''),
+        heading: HeadingLevel.HEADING_1,
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 400, after: 200 },
+      }));
+      continue;
     }
+    if (/^##\s/.test(line)) {
+      paragraphs.push(new Paragraph({
+        text: line.replace(/^##\s/, ''),
+        heading: HeadingLevel.HEADING_2,
+        spacing: { before: 300, after: 150 },
+      }));
+      continue;
+    }
+    if (/^###\s/.test(line)) {
+      paragraphs.push(new Paragraph({
+        text: line.replace(/^###\s/, ''),
+        heading: HeadingLevel.HEADING_3,
+        spacing: { before: 200, after: 100 },
+      }));
+      continue;
+    }
+
+    // 2. Lists
+    if (/^[-*+]\s/.test(line)) {
+      const content = line.replace(/^[-*+]\s/, '');
+      paragraphs.push(new Paragraph({
+        children: parseInlineFormatting(content),
+        bullet: { level: 0 },
+        spacing: { after: 100 },
+      }));
+      continue;
+    }
+
+    // 3. Spacing
+    if (line.trim() === '') {
+      paragraphs.push(new Paragraph({ text: '' }));
+      continue;
+    }
+
+    // 4. Default Text with inline formatting
+    paragraphs.push(new Paragraph({
+      children: parseInlineFormatting(line),
+      spacing: { after: 120 },
+    }));
   }
 
   return paragraphs;
+}
+
+/**
+ * Robust inline formatting parser for DOCX.
+ * Handles: **bold**, __bold__, *italic*, _italic_, ***bold-italic***
+ */
+function parseInlineFormatting(text: string): TextRun[] {
+  const runs: TextRun[] = [];
+  
+  // Clean up stray symbols commonly found in LLM output
+  let processed = text.replace(/\\([*#_])/g, '$1'); 
+
+  // Combined styles bold-italic
+  const pattern = /(\*\*\*|__{3}|___)(.*?)\1|(\*\*|__)(.*?)\3|(\*|_)(.*?)\5/g;
+  
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(processed)) !== null) {
+    if (match.index > lastIndex) {
+      runs.push(new TextRun({ text: processed.substring(lastIndex, match.index) }));
+    }
+
+    const boldItalic = match[2];
+    const bold = match[4];
+    const italic = match[6];
+
+    if (boldItalic) {
+      runs.push(new TextRun({ text: boldItalic, bold: true, italics: true }));
+    } else if (bold) {
+      runs.push(new TextRun({ text: bold, bold: true }));
+    } else if (italic) {
+      runs.push(new TextRun({ text: italic, italics: true }));
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < processed.length) {
+    runs.push(new TextRun({ text: processed.substring(lastIndex) }));
+  }
+
+  if (runs.length === 0 && processed.length > 0) {
+    runs.push(new TextRun({ text: processed.replace(/[*_]/g, '') }));
+  }
+
+  return runs;
 }
 
 /**
@@ -315,31 +385,10 @@ export async function create_docx(args: {
   }
 
   try {
-    const folderPath = resolveFolder(folderName);
-    const filePath = resolveFile(folderPath, fileName, 'docx');
+    const filePath = resolvePath(folderName, fileName, 'docx');
+    ensureDir(path.dirname(filePath));
 
-    // Derive a title from filename if content doesn't start with a heading
-    const displayTitle = fileName.trim().replace(/\.[a-z]+$/i, '').replace(/[_-]/g, ' ');
-
-    const titleParagraph = new Paragraph({
-      children: [new TextRun({ text: displayTitle, bold: true, size: 40 })],
-      heading: HeadingLevel.TITLE,
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 400, after: 200 },
-    });
-
-    const metaParagraph = new Paragraph({
-      children: [
-        new TextRun({
-          text: `Generated by Scrappy — Cosmic CLI Agent | ${new Date().toLocaleString()}`,
-          italics: true,
-          color: '888888',
-          size: 18,
-        }),
-      ],
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 600 },
-    });
+    const displayTitle = fileName.trim().replace(/\.[a-z]+$/i, '').replace(/[_-]/g, ' ').toUpperCase();
 
     const bodyParagraphs = parseDocxContent(content);
 
@@ -349,8 +398,36 @@ export async function create_docx(args: {
       description: 'Generated by Scrappy CLI',
       sections: [
         {
-          properties: {},
-          children: [titleParagraph, metaParagraph, ...bodyParagraphs],
+          properties: {
+            page: {
+              margin: {
+                top: 1440, // 1 inch
+                right: 1440,
+                bottom: 1440,
+                left: 1440,
+              },
+            },
+          },
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: displayTitle, bold: true, size: 48, color: '2563EB' })],
+              alignment: AlignmentType.CENTER,
+              spacing: { before: 400, after: 100 },
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: `Generated: ${new Date().toLocaleString()}`,
+                  italics: true,
+                  color: '6B7280',
+                  size: 18,
+                }),
+              ],
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 800 },
+            }),
+            ...bodyParagraphs,
+          ],
         },
       ],
     });
@@ -365,9 +442,11 @@ export async function create_docx(args: {
   }
 }
 
-export default {
+export const filegen = {
   create_output_folder,
   create_excel,
   create_markdown,
   create_docx,
 };
+
+export default filegen;

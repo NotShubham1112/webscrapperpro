@@ -59,7 +59,8 @@ export async function searchWeb(query: string, maxResults = 10): Promise<SearchR
       // Clean DDG redirect links
       if (url.startsWith('//duckduckgo.com/l/?') || url.startsWith('/l/?')) {
         try {
-          const u = new URL('https:' + (url.startsWith('/') ? url : '//duckduckgo.com' + url));
+          const uStr = url.startsWith('//') ? 'https:' + url : 'https://duckduckgo.com' + url;
+          const u = new URL(uStr);
           url = decodeURIComponent(u.searchParams.get('uddg') ?? url);
         } catch { /* keep */ }
       }

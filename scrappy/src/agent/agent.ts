@@ -26,6 +26,7 @@ export interface AgentResponse {
 
 export class ScrappyAgent {
   private systemPrompt: string;
+  public beforeToolExecute?: (tool: string, args: any) => Promise<{ proceed: boolean; args?: any }>;
 
   constructor() {
     this.systemPrompt = `You are Scrappy, a powerful and friendly agentic AI assistant built by Cosmic.
@@ -38,19 +39,22 @@ Your personality:
 - Format responses with clear sections when there is a lot of data
 - Use bullet points, headings, and structure where appropriate
 
-When the user mentions a URL → use fetch, extract, or read_url_and_answer_question tools.
-When the user asks to search → use search_web.
-When the user asks to generate/export/save a file → use the appropriate create_* or save_* tool.
-When the user asks for a comprehensive research report → use run_research.
-When the user asks for stock info or financial data → use run_stock.
-When the user asks to generate a README for a project/folder → use run_readme.
-When the user asks to crawl a website deeply → use run_crawl.
-When the user asks to run an automation recipe (like seo audit, scam check) → use run_recipe.
-When you can answer from memory → use answer_directly.
+CRITICAL GUIDELINES:
+1. USE CONTEXT FIRST: Before using 'search_web', check if the information exists in the conversation history or can be extracted from a URL already provided by the user. Only search if the information is missing.
+2. BE CONCISE: Don't over-explain if a simple answer suffices.
+3. TOOL USAGE: 
+   - When the user mentions a URL → use fetch, extract, or read_url_and_answer_question tools.
+   - For JavaScript-heavy websites (React, Vue, Angular) or when normal scraping fails → use fetch_html_advanced.
+   - When the user asks to search → use search_web.
+   - When the user asks to generate/export/save a file → use the appropriate create_* or save_* tool.
+   - When the user asks for a comprehensive research report → use run_research.
+   - When the user asks for financial data or a detailed stock report → use run_stock.
+   - When the user asks for TradingView data → use get_tradingview_data.
+   - When you can answer from memory or from previous turns → use answer_directly.
 
 Available tools: ${AVAILABLE_TOOLS.join(', ')}
 
-Always respond helpfully. If a tool fails, explain clearly and suggest alternatives.`;
+Always respond helpfully. If a tool fails, explain clearly and suggest an alternative.`;
   }
 
   async process(
@@ -71,7 +75,20 @@ Always respond helpfully. If a tool fails, explain clearly and suggest alternati
 
     let toolResult: ToolResult | undefined;
     if (tool !== 'answer_directly') {
-      toolResult = await executeTool(tool, args ?? {});
+      let finalArgs = args ?? {};
+      if (this.beforeToolExecute) {
+        const intercept = await this.beforeToolExecute(tool, finalArgs);
+        if (!intercept.proceed) {
+          return {
+            text: `Action cancelled by user: ${tool}`,
+            toolUsed: tool,
+            data: { status: 'cancelled' }
+          };
+        }
+        if (intercept.args) finalArgs = intercept.args;
+      }
+      
+      toolResult = await executeTool(tool, finalArgs);
     }
 
     const self = this;
@@ -97,7 +114,7 @@ Always respond helpfully. If a tool fails, explain clearly and suggest alternati
       const resultSummary = JSON.stringify(toolResult.data, null, 2).slice(0, 5000);
       const messages: ChatMessage[] = [
         { role: 'system', content: self.systemPrompt },
-        ...history.slice(-8), // Take a bit more history, but it already includes the current user message
+        ...history.slice(-8), 
         { role: 'assistant', content: `[Tool: ${tool} | Reasoning: ${reasoning ?? 'N/A'}]` },
         { 
           role: 'user', 
@@ -127,16 +144,18 @@ Always respond helpfully. If a tool fails, explain clearly and suggest alternati
               const src = parts[0].replace('<think>', '');
               thoughtCount += src.split(/\s+/).filter(Boolean).length;
               buffer = parts[1] || '';
-              // No yield for the brief transition to content unless buffer has stuff.
+              // Don't yield yet, Wait for next iteration to yield content
             } else {
-              const newTokens = chunk.split(/\s+/).filter(Boolean).length;
-              thoughtCount += newTokens;
+              // Extract new tokens from chunk specifically for better granularity
+              const thoughtPart = buffer.includes('<think>') ? buffer.split('<think>')[1] : chunk;
+              const newTokens = thoughtPart.split(/\s+/).filter(Boolean).length;
+              thoughtCount += newTokens > 0 ? newTokens : 1; // Ensure progress even for single chars
               yield { type: 'thought', thoughtTotal: thoughtCount };
               continue;
             }
           }
 
-          if (buffer) {
+          if (buffer && !isThinking) {
             yield { type: 'content', text: buffer };
             buffer = '';
           }
@@ -173,11 +192,5 @@ Always respond helpfully. If a tool fails, explain clearly and suggest alternati
     } catch {
       return 'I encountered an error. Please check your configuration with `scrappy setup`.';
     }
-  }
-
-  /** @deprecated use streaming process */
-  private formatResultFallback(tool: string, result: ToolResult): string {
-    if (result.filePath) return `✅ File saved: ${result.filePath}`;
-    return `✅ Done.\n\`\`\`json\n${JSON.stringify(result.data, null, 2).slice(0, 1000)}\n\`\`\``;
   }
 }

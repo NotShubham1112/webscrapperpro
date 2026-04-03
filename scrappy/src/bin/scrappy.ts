@@ -27,6 +27,7 @@ import { runReadme } from '../cli/readme';
 import { runCrawl } from '../cli/crawl';
 import { runRecipe } from '../cli/recipe';
 import { runPlugins } from '../cli/plugins';
+import { runWorkflow } from '../cli/workflow';
 
 const program = new Command();
 
@@ -131,6 +132,14 @@ program
   .argument('[plugin]', 'Plugin name')
   .action(async (action: string, plugin?: string) => {
     await runPlugins(action, plugin);
+    process.exit(0);
+  });
+
+program
+  .command('workflow')
+  .description('Celestial Workflow — Generate professional document suite')
+  .action(async () => {
+    await runWorkflow();
     process.exit(0);
   });
 

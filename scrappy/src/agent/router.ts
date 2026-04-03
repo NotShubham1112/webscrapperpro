@@ -36,6 +36,8 @@ import { runReadme } from '../cli/readme';
 import { runCrawl } from '../cli/crawl';
 import { runRecipe } from '../cli/recipe';
 
+import { getTradingViewMarketsData, detectTradingViewAPIs } from '../tools/tradingview-api';
+
 export interface ToolResult {
   success: boolean;
   data?: any;
@@ -48,6 +50,7 @@ const extractor = new Extractor();
 
 const AVAILABLE_TOOLS = [
   'fetch_html',
+  'fetch_html_advanced',
   'extract_text',
   'extract_links',
   'extract_tables',
@@ -56,6 +59,8 @@ const AVAILABLE_TOOLS = [
   'answer_directly',
   'save_json',
   'save_text',
+  // ── TradingView API tool ────────────────────────────────────────────────────
+  'get_tradingview_data',
   // ── Stock tools ────────────────────────────────────────────────────────────
   'get_stock_quote',
   'get_stock_history',
@@ -93,6 +98,23 @@ export async function executeTool(
         if (!url) return { success: false, error: 'Missing url argument' };
         const html = await scraper.fetchHtml(url);
         return { success: true, data: { html, length: html.length } };
+      }
+
+      case 'fetch_html_advanced': {
+        const { url } = args;
+        if (!url) return { success: false, error: 'Missing url argument' };
+        const result = await scraper.fetchWithDetails(url);
+        return {
+          success: result.mode !== 'error',
+          data: {
+            mode: result.mode,
+            html: result.html?.slice(0, 10000),
+            apiEndpoints: result.apiEndpoints,
+            logs: result.logs,
+            length: result.html?.length || 0,
+          },
+          error: result.error,
+        };
       }
 
       case 'extract_text': {
@@ -147,24 +169,24 @@ export async function executeTool(
       // ── File saving (Simple) ─────────────────────────────────────────────
 
       case 'save_json': {
-        const { data, filename } = args;
+        const { data, filename, folderName } = args;
         if (!data) return { success: false, error: 'Missing data argument' };
         const { getOutputPath, ensureScrappyDirs } = await import('../utils/paths');
         ensureScrappyDirs();
         const fName = filename ?? `scrappy_${Date.now()}.json`;
-        const filePath = getOutputPath(fName.endsWith('.json') ? fName : fName + '.json');
+        const filePath = getOutputPath(fName.endsWith('.json') ? fName : fName + '.json', folderName);
         const fs = await import('fs');
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
         return { success: true, filePath, data: { savedTo: filePath } };
       }
 
       case 'save_text': {
-        const { content, filename } = args;
+        const { content, filename, folderName } = args;
         if (!content) return { success: false, error: 'Missing content argument' };
         const { getOutputPath, ensureScrappyDirs } = await import('../utils/paths');
         ensureScrappyDirs();
         const fName = filename ?? `scrappy_${Date.now()}.txt`;
-        const filePath = getOutputPath(fName.endsWith('.txt') ? fName : fName + '.txt');
+        const filePath = getOutputPath(fName.endsWith('.txt') ? fName : fName + '.txt', folderName);
         const fs = await import('fs');
         fs.writeFileSync(filePath, content, 'utf-8');
         return { success: true, filePath, data: { savedTo: filePath } };
@@ -181,8 +203,13 @@ export async function executeTool(
       // ═══════════════════════════════════════════════════════════════════════
 
       case 'get_stock_quote': {
-        const { symbol } = args;
-        if (!symbol) return { success: false, error: 'Missing symbol argument' };
+        const symbol = String(args.symbol || '').toUpperCase().trim();
+        if (!symbol || symbol.includes(' ') || symbol.length > 10) {
+          return { 
+            success: false, 
+            error: `Invalid ticker symbol: "${symbol}". Please provide a single ticker symbol (e.g., TSLA, AAPL). For general market queries, use search_web.` 
+          };
+        }
         console.log(colors.info(`[router] get_stock_quote → ${symbol}`));
         return await get_stock_quote({ symbol });
       }
@@ -267,8 +294,12 @@ export async function executeTool(
       case 'run_stock': {
         const { ticker, options } = args;
         if (!ticker) return { success: false, error: 'Missing ticker argument' };
-        await runStock(ticker, options || { report: true });
-        return { success: true, data: { status: 'completed successfully' } };
+        try {
+          await runStock(ticker, options || { report: true });
+          return { success: true, data: { status: 'completed successfully' } };
+        } catch (err: any) {
+          return { success: false, error: `Stock tool failed: ${err.message}` };
+        }
       }
 
       case 'run_readme': {
@@ -289,6 +320,39 @@ export async function executeTool(
         if (!name) return { success: false, error: 'Missing name argument' };
         await runRecipe(name, recipeArgs || []);
         return { success: true, data: { status: 'completed successfully' } };
+      }
+
+      case 'get_tradingview_data': {
+        const { limit, detectOnly } = args;
+        console.log(colors.info(`[router] get_tradingview_data → ${limit || 20} stocks`));
+
+        try {
+          if (detectOnly) {
+            // Just detect APIs without fetching data
+            const apis = await detectTradingViewAPIs();
+            return {
+              success: true,
+              data: {
+                detectedAPIs: apis,
+                message: 'API detection complete - NO HTML SCRAPED',
+              },
+            };
+          }
+
+          // Fetch actual stock data from TradingView API
+          const result = await getTradingViewMarketsData(limit || 20);
+          return {
+            success: true,
+            data: {
+              stocks: result.stocks,
+              source: result.source,
+              timestamp: result.timestamp,
+              count: result.stocks.length,
+            },
+          };
+        } catch (err: any) {
+          return { success: false, error: `TradingView API error: ${err.message}` };
+        }
       }
 
       default:

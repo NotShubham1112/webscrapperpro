@@ -22,7 +22,6 @@ const TerminalRenderer = require('marked-terminal').default || require('marked-t
 
 marked.setOptions({
   renderer: new TerminalRenderer({
-    width: 64, 
     reflowText: true,
     showSectionPrefix: false,
     unescape: true,
@@ -57,6 +56,10 @@ export const c = {
   cyan:       chalk.cyanBright,
   magenta:    chalk.hex('#818CF8'),
   bold:       chalk.bold,
+  bgBlue:     chalk.bgHex('#3B82F6'),
+  bgGreen:    chalk.bgHex('#4ADE80'),
+  bgRed:      chalk.bgHex('#F87171'),
+  bgYellow:   chalk.bgHex('#FACC15'),
 };
 
 // ─── ASCII Art ──────────────────────────────────────────────────────────────
@@ -77,20 +80,27 @@ const SCRAPPY_ASCII = `
  ███████║╚██████╗██║  ██║██║  ██║██║     ██║        ██║
  ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝        ╚═╝`;
 
-const TAGLINE = '  ✦ Agentic Web Intelligence · Powered by Cosmic ✦';
-const DIVIDER  = '═'.repeat(62);
-
 /**
  * Print the full Cosmic + Scrappy ASCII intro banner.
  */
 export function displayLogo(): void {
   console.log();
+  const width = getLayoutWidth();
+  
+  // COSMIC (Blue)
   console.log(c.blue(COSMIC_ASCII));
-  console.log(c.whiteBold(SCRAPPY_ASCII));
-  console.log();
-  console.log(c.blue(DIVIDER));
-  console.log(c.lightBlue(TAGLINE));
-  console.log(c.blue(DIVIDER));
+  // SCRAPPY (White)
+  console.log(c.white(SCRAPPY_ASCII));
+  
+  const divider = c.blue('═'.repeat(width));
+  console.log(divider);
+  
+  // Tagline centered
+  const tagline = '✦ Agentic Web Intelligence · Powered by Cosmic ✦';
+  const padding = Math.max(0, Math.floor((width - tagline.length) / 2));
+  console.log(' '.repeat(padding) + c.lightBlue.bold(tagline));
+  
+  console.log(divider);
   console.log();
 }
 
@@ -246,9 +256,72 @@ export function printResponseLine(text: string): void {
     for (const line of wrappedLines) {
       const stripped = stripAnsi(line);
       const padding = Math.max(0, width - 4 - stripped.length);
-      console.log(c.blue('║ ') + line + ' '.repeat(padding) + c.blue(' ║'));
+      process.stdout.write(c.blue('║ ') + line + ' '.repeat(padding) + c.blue(' ║\n'));
     }
   }
+}
+
+// ─── Live Streaming Mode ───────────────────────────────────────────────────
+
+let currentLineLength = 0;
+let isFirstChunkOfLine = true;
+
+/**
+ * Start a live-rendering response session.
+ * Uses process.stdout.write directly to avoid newline buffering.
+ */
+export function startLiveResponse(isTool: boolean = false): void {
+  startResponse(isTool);
+  currentLineLength = 0;
+  isFirstChunkOfLine = true;
+}
+
+/**
+ * Print a chunk of text in real-time, handling wrapping and borders.
+ */
+export function printLiveChunk(chunk: string): void {
+  const width = getLayoutWidth();
+  const maxWidth = width - 4;
+
+  const chars = Array.from(chunk);
+  for (const char of chars) {
+    if (isFirstChunkOfLine) {
+      process.stdout.write(c.blue('║ '));
+      isFirstChunkOfLine = false;
+    }
+
+    if (char === '\n') {
+      const padding = Math.max(0, maxWidth - currentLineLength);
+      process.stdout.write(' '.repeat(padding) + c.blue(' ║\n'));
+      currentLineLength = 0;
+      isFirstChunkOfLine = true;
+      continue;
+    }
+
+    process.stdout.write(char);
+    currentLineLength++;
+
+    if (currentLineLength >= maxWidth) {
+      process.stdout.write(c.blue(' ║\n'));
+      currentLineLength = 0;
+      isFirstChunkOfLine = true;
+    }
+  }
+}
+
+/**
+ * Completes the live-rendering response session.
+ * Closes the last line and the frame.
+ */
+export function endLiveResponse(): void {
+  const width = getLayoutWidth();
+  const maxWidth = width - 4;
+
+  if (!isFirstChunkOfLine) {
+    const padding = Math.max(0, maxWidth - currentLineLength);
+    process.stdout.write(' '.repeat(padding) + c.blue(' ║\n'));
+  }
+  endResponse();
 }
 
 /**
@@ -424,13 +497,16 @@ function wrapText(text: string, maxWidth: number): string[] {
  */
 export function printChatHeader(): void {
   const width = getLayoutWidth();
-  console.log();
   const title = ' 🌌 Scrappy Chat — Cosmic Agentic CLI ';
-  const side = '═'.repeat(Math.floor((width - title.length - 2) / 2));
-  const extra = (width - title.length - 2) % 2 !== 0 ? '═' : '';
+  const sideLength = Math.max(0, Math.floor((width - title.length - 2) / 2));
+  const side = '═'.repeat(sideLength);
+  const remaining = width - title.length - 2 - (sideLength * 2);
+  const extra = remaining > 0 ? '═'.repeat(remaining) : '';
 
   console.log(c.blue(`╔${side}${c.blueBold(title)}${side}${extra}╗`));
-  console.log(c.blue(`║ `) + c.gray(`Type your query below. Type "exit" or "quit" to leave.`.padEnd(width - 4)) + c.blue(` ║`));
+  const instruction = `Type your query below. Type "exit" or "quit" to leave.`;
+  const padding = Math.max(0, width - 4 - instruction.length);
+  console.log(c.blue(`║ `) + c.gray(instruction) + ' '.repeat(padding) + c.blue(` ║`));
   console.log(c.blue(`╚${'═'.repeat(width - 2)}╝`));
   console.log();
 }

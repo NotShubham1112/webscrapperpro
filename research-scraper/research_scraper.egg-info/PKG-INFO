@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: research-scraper
+Version: 0.1.0
+Summary: An industrial-grade AI-driven agentic web scraper CLI tool
+Author-email: Developer <developer@example.com>
+Requires-Dist: typer>=0.9.0
+Requires-Dist: requests>=2.28.0
+Requires-Dist: beautifulsoup4>=4.11.0
+Requires-Dist: lxml>=4.9.0
+Requires-Dist: playwright>=1.40.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: ollama>=0.1.0
+Requires-Dist: groq>=0.4.0
+Requires-Dist: mistralai>=0.0.5
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: flake8>=6.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"

@@ -1,30 +1,50 @@
 /**
- * Web scraper core functionality - Enhanced with UniversalScraper auto-fallback
- * Handles fetching HTML content from URLs using multiple modes:
- * 1. FAST MODE - Direct HTTP requests
- * 2. JS MODE - Playwright headless browser
- * 3. API MODE - Network interception
+ * UniversalScraper - Auto-fallback scraping system
+ * Company: Cosmic
+ *
+ * Implements 4 modes:
+ * 1. FAST MODE - Direct HTML scraping with axios
+ * 2. JS MODE - Headless browser rendering with Playwright
+ * 3. API MODE - Network call interception to discover APIs
+ * 4. ANTI-BOT MODE - Proxy rotation and header randomization
  */
 
 import axios, { AxiosError } from 'axios';
 import * as cheerio from 'cheerio';
 
+// Playwright types - will be imported dynamically
+interface PlaywrightPage {
+  goto(url: string, options?: { timeout?: number; waitUntil?: string }): Promise<void>;
+  content(): Promise<string>;
+  waitForTimeout(ms: number): Promise<void>;
+}
+
+interface PlaywrightContext {
+  newPage(): Promise<PlaywrightPage>;
+  route(pattern: string, handler: (route: any, request: any) => Promise<void>): Promise<void>;
+}
+
+interface PlaywrightBrowser {
+  newContext(options?: any): Promise<PlaywrightContext>;
+  close(): Promise<void>;
+}
+
 interface ScrapingResult {
   mode: 'fast' | 'js' | 'api' | 'error';
+  data?: any;
   html?: string;
   apiEndpoints?: string[];
   error?: string;
   logs: string[];
 }
 
-export class Scraper {
-  private timeout: number;
-  private userAgent: string;
-  private userAgentPool: string[];
+export class UniversalScraper {
   private headers: Record<string, string>;
+  private userAgentPool: string[];
+  private timeout: number;
   private maxRetries: number;
 
-  constructor(timeout: number = 30000, userAgent: string = '') {
+  constructor(timeout: number = 30000) {
     this.timeout = timeout;
     this.maxRetries = 2;
 
@@ -37,7 +57,6 @@ export class Scraper {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0',
     ];
 
-    this.userAgent = userAgent || this.userAgentPool[0];
     this.headers = this.getRandomHeaders();
   }
 
@@ -93,6 +112,7 @@ export class Scraper {
     const hasTables = $('table').length > 0;
     const hasLists = $('ul, ol').length > 0;
     const hasParagraphs = $('p').length > 3;
+    const hasDivs = $('div').length > 5;
 
     // If text is very short and we see script loaders, probably needs JS
     const hasRealContent = textContent.length > 500 || hasTables || hasLists || hasParagraphs;
@@ -146,15 +166,15 @@ export class Scraper {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // MODE 1: FAST MODE - Direct HTTP requests
+  // MODE 1: FAST MODE - Direct HTML scraping
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async fastScrape(url: string, retryCount: number = 0): Promise<{ success: boolean; html?: string; logs: string[] }> {
+  async fastScrape(url: string, retryCount: number = 0): Promise<{ success: boolean; html?: string; logs: string[] }> {
     const logs: string[] = [];
-    logs.push(`[FAST MODE] Fetching via requests...`);
+    logs.push(`[FAST MODE] Attempting direct HTTP fetch (retry: ${retryCount})...`);
 
     try {
-      // Random delay for anti-bot evasion on retry
+      // Random delay for anti-bot evasion
       if (retryCount > 0) {
         await this.delay();
       }
@@ -179,7 +199,7 @@ export class Scraper {
 
       // Check for JS-rendered content
       if (!this.hasMeaningfulContent(html) && this.isJSRendered(html)) {
-        logs.push('[FAST MODE] JS-rendered website detected, switching to headless browser');
+        logs.push('[FAST MODE] JS-rendered website detected, needs headless browser');
         return { success: false, html, logs };
       }
 
@@ -196,9 +216,9 @@ export class Scraper {
       const axiosError = error as AxiosError;
       logs.push(`[FAST MODE] Error: ${axiosError.message}`);
 
-      // Retry on rate limit
+      // Retry on specific errors
       if (retryCount < this.maxRetries && axiosError.response?.status === 429) {
-        logs.push('[FAST MODE] Rate limited, retrying...');
+        logs.push('[FAST MODE] Rate limited, retrying with different headers...');
         return this.fastScrape(url, retryCount + 1);
       }
 
@@ -207,15 +227,15 @@ export class Scraper {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // MODE 2: JS MODE - Headless browser rendering with Playwright
+  // MODE 2: JS MODE - Headless browser rendering
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async jsScrape(url: string): Promise<{ success: boolean; html?: string; logs: string[] }> {
+  async jsScrape(url: string): Promise<{ success: boolean; html?: string; logs: string[] }> {
     const logs: string[] = [];
-    logs.push('[JS MODE] Loading page with Playwright...');
+    logs.push('[JS MODE] Launching headless browser with Playwright...');
 
     try {
-      // Dynamically import playwright
+      // Dynamically import playwright to avoid issues if not installed
       const { chromium } = await import('playwright');
 
       const browser = await chromium.launch({
@@ -226,33 +246,39 @@ export class Scraper {
           '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
+          '--window-size=1920,1080',
         ],
       });
 
       const context = await browser.newContext({
         userAgent: this.userAgentPool[Math.floor(Math.random() * this.userAgentPool.length)],
         viewport: { width: 1920, height: 1080 },
+        locale: 'en-US',
       });
 
       const page = await context.newPage();
 
-      // Navigate with networkidle wait
+      // Navigate with extended timeout
       await page.goto(url, {
         timeout: 60000,
         waitUntil: 'networkidle',
       });
 
-      // Wait for hydration
-      logs.push('[JS MODE] Waiting for JS hydration (3s)...');
+      // Wait for hydration (React/Vue/Angular to finish rendering)
+      logs.push('[JS MODE] Waiting for JavaScript hydration (3s)...');
       await page.waitForTimeout(3000);
 
-      // Get rendered HTML
+      // Additional wait for dynamic content
+      await page.waitForTimeout(1000);
+
+      // Get the rendered HTML
       const html = await page.content();
+
       await browser.close();
 
       // Validate content
       if (!this.hasMeaningfulContent(html)) {
-        logs.push('[JS MODE] Rendered DOM still lacks content, will try API discovery');
+        logs.push('[JS MODE] Rendered DOM still lacks meaningful content');
         return { success: false, html, logs };
       }
 
@@ -265,7 +291,6 @@ export class Scraper {
 
       if (errorMessage.includes('playwright') || errorMessage.includes('Cannot find module')) {
         logs.push('[JS MODE] Playwright not installed. Run: npm install playwright');
-        logs.push('[JS MODE] Then run: npx playwright install chromium');
       }
 
       return { success: false, logs };
@@ -273,14 +298,14 @@ export class Scraper {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // MODE 3: API MODE - Discover and capture API endpoints
+  // MODE 3: API MODE - Discover network calls
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async apiDiscovery(url: string): Promise<{ success: boolean; endpoints: string[]; logs: string[] }> {
+  async apiDiscovery(url: string): Promise<{ success: boolean; endpoints: string[]; logs: string[] }> {
     const logs: string[] = [];
     const endpoints: string[] = [];
 
-    logs.push('[API MODE] Attempting to detect API calls...');
+    logs.push('[API MODE] Intercepting network calls to find API endpoints...');
 
     try {
       const { chromium } = await import('playwright');
@@ -308,6 +333,7 @@ export class Scraper {
           /\/scan/i,
           /\/fetch/i,
           /\/data/i,
+          /application\/json/i,
         ];
 
         const isApiRequest = apiPatterns.some(pattern => pattern.test(requestUrl)) ||
@@ -316,13 +342,16 @@ export class Scraper {
 
         if (isApiRequest && !endpoints.some(e => e === requestUrl)) {
           endpoints.push(requestUrl);
-          logs.push(`[API MODE] Found: ${requestUrl.substring(0, 80)}...`);
+          logs.push(`[API MODE] Found endpoint: ${requestUrl.substring(0, 100)}...`);
         }
 
         await route.continue();
       });
 
+      // Navigate to page
       await page.goto(url, { timeout: 60000, waitUntil: 'networkidle' });
+
+      // Wait for API calls to complete
       await page.waitForTimeout(5000);
 
       await browser.close();
@@ -332,7 +361,7 @@ export class Scraper {
         return { success: false, endpoints: [], logs };
       }
 
-      logs.push(`[API MODE] Discovered ${endpoints.length} endpoints`);
+      logs.push(`[API MODE] Discovered ${endpoints.length} API endpoints`);
       return { success: true, endpoints, logs };
 
     } catch (error) {
@@ -361,7 +390,7 @@ export class Scraper {
       };
     }
 
-    // Step 2: Try JS MODE
+    // Step 2: Try JS MODE if fast mode failed
     const jsResult = await this.jsScrape(url);
     allLogs.push(...jsResult.logs);
 
@@ -373,7 +402,7 @@ export class Scraper {
       };
     }
 
-    // Step 3: Try API MODE
+    // Step 3: Try API MODE if JS mode failed
     const apiResult = await this.apiDiscovery(url);
     allLogs.push(...apiResult.logs);
 
@@ -394,53 +423,60 @@ export class Scraper {
   }
 
   /**
-   * Fetch HTML content from a URL (backward compatible)
-   * Uses the auto-fallback scraping system
+   * Quick scrape method that returns just the HTML (for backward compatibility)
    */
   async fetchHtml(url: string): Promise<string> {
     const result = await this.scrape(url);
 
     if (result.mode === 'error') {
-      throw new Error(result.error || 'Scraping failed after all fallback attempts');
+      throw new Error(result.error || 'Scraping failed');
     }
 
     if (result.mode === 'api' && result.apiEndpoints) {
-      // Return discovered API endpoints as HTML
-      return `<html><body>
-        <h1>API Endpoints Discovered</h1>
-        <p>The following API endpoints were found on ${url}:</p>
-        <ul>${result.apiEndpoints.map(e => `<li><code>${e}</code></li>`).join('')}</ul>
-      </body></html>`;
+      // For API mode, try to fetch the first endpoint
+      if (result.apiEndpoints.length > 0) {
+        try {
+          const apiResponse = await axios.get(result.apiEndpoints[0], {
+            timeout: this.timeout,
+            headers: this.headers,
+          });
+          return JSON.stringify(apiResponse.data, null, 2);
+        } catch (e) {
+          // Return the endpoints as HTML if fetch fails
+          return `<html><body><h1>API Endpoints Discovered</h1><ul>${result.apiEndpoints.map(e => `<li>${e}</li>`).join('')}</ul></body></html>`;
+        }
+      }
     }
 
-    if (!result.html) {
-      throw new Error('No content retrieved from URL');
-    }
-
-    return result.html;
+    return result.html || '';
   }
 
   /**
-   * Validate if a URL is accessible
+   * Scrape and extract structured data with CSS selectors
    */
-  async validateUrl(url: string): Promise<boolean> {
-    try {
-      await axios.head(url, {
-        timeout: 5000,
-        headers: { 'User-Agent': this.userAgent },
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  async scrapeWithSelectors(url: string, selectors: Record<string, string>): Promise<ScrapingResult & { extracted?: Record<string, any> }> {
+    const result = await this.scrape(url);
 
-  /**
-   * Get detailed scraping result with mode info
-   */
-  async fetchWithDetails(url: string): Promise<ScrapingResult> {
-    return await this.scrape(url);
+    if (result.html) {
+      const $ = cheerio.load(result.html);
+      const extracted: Record<string, any> = {};
+
+      for (const [key, selector] of Object.entries(selectors)) {
+        const elements = $(selector);
+        if (elements.length === 1) {
+          extracted[key] = elements.text().trim();
+        } else if (elements.length > 1) {
+          extracted[key] = elements.map((_, el) => $(el).text().trim()).get();
+        } else {
+          extracted[key] = null;
+        }
+      }
+
+      return { ...result, extracted };
+    }
+
+    return result;
   }
 }
 
-export default Scraper;
+export default UniversalScraper;

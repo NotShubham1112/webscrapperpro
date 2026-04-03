@@ -1,0 +1,21 @@
+# Scrappy Configuration File
+# Copy this to ~/.scrappy/config.yaml or ./scrappy.config.yaml to customize
+
+defaultModel: ollama
+maxIterations: 5
+requestTimeout: 30000
+userAgent: "Scrappy/1.0 (+https://github.com/cosmic/scrappy)"
+
+models:
+  ollama:
+    model: "llama2"
+    endpoint: "http://localhost:11434"
+  openrouter:
+    model: "openai/gpt-3.5-turbo"
+    endpoint: "https://openrouter.ai/api/v1"
+  groq:
+    model: "mixtral-8x7b-32768"
+    endpoint: "https://api.groq.com/openai/v1"
+  mistral:
+    model: "mistral-tiny"
+    endpoint: "https://api.mistral.ai/v1"

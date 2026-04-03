@@ -8,15 +8,91 @@ import ExcelJS from 'exceljs';
 import { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Packer } from 'docx';
 import { getLLM } from '../agent/llm';
 
-export async function runStock(ticker: string, options: { excel?: boolean, docx?: boolean, report?: boolean }) {
+export async function runStock(ticker: string, options: { excel?: boolean, docx?: boolean, report?: boolean }): Promise<void> {
   startResponse(true);
-  printResponseLine(c.whiteBold(`📈 Scrappy Stock Market Agent — ${ticker.toUpperCase()}`));
+  
+  let symbol = ticker.toUpperCase().trim();
+  const lowerTicker = ticker.toLowerCase();
+
+  // ── Market Ranking Detection (Screeners) ───────────────────────────────────
+  const isGainers = lowerTicker.includes('gainer') || lowerTicker.includes('performing');
+  const isLosers = lowerTicker.includes('loser') || lowerTicker.includes('declining');
+  const isActive = lowerTicker.includes('active') || lowerTicker.includes('volume');
+  const isTopX = lowerTicker.match(/top\s*(\d+)/);
+  const count = isTopX ? parseInt(isTopX[1], 10) : 20;
+
+  if (isGainers || isLosers || isActive) {
+    const listType = isGainers ? 'day_gainers' : isLosers ? 'day_losers' : 'most_actives';
+    const label = isGainers ? 'TOP GAINERS' : isLosers ? 'TOP LOSERS' : 'MOST ACTIVE';
+    
+    printResponseLine(c.blueBold(`📊 Market Ranking Mode: `) + c.white(`${label} (Top ${count})`));
+    
+    try {
+      const screener = await (yahooFinance as any).screener(listType, { count });
+      const quotes = screener.quotes;
+
+      if (!quotes || quotes.length === 0) throw new Error(`No data found for ${listType}`);
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const folder = process.cwd();
+
+      // Exports
+      let excelFile = '';
+      if (options.excel || options.report) {
+         const wb = new ExcelJS.Workbook();
+         const ws = wb.addWorksheet(label);
+         ws.columns = [
+           { header: 'Symbol', key: 'symbol', width: 15 },
+           { header: 'Name', key: 'name', width: 30 },
+           { header: 'Price', key: 'price', width: 15 },
+           { header: 'Change %', key: 'change', width: 15 },
+           { header: 'Volume', key: 'volume', width: 20 }
+         ];
+         quotes.forEach(q => ws.addRow({
+           symbol: q.symbol,
+           name: q.shortName || q.longName,
+           price: q.regularMarketPrice,
+           change: q.regularMarketChangePercent,
+           volume: q.regularMarketVolume
+         }));
+         excelFile = path.join(folder, `${listType}-${timestamp}.xlsx`);
+         await wb.xlsx.writeFile(excelFile);
+      }
+
+      printResponseLine(c.green('  ✓ ') + c.white('Report Generated for ') + c.blueBold(`${quotes.length}`) + c.white(' stocks.'));
+      if (excelFile) printResponseLine(c.green('  ✓ ') + c.white('Excel    : ') + c.gray(excelFile));
+      
+      endResponse();
+      return;
+    } catch (err: any) {
+      console.error(c.red(`  ✗ Market ranking failed: ${err.message}`));
+      throw err;
+    }
+  }
+
+  // ── Original Single Ticker Logic ──────────────────────────────────────────
+  let discoveredSymbol = '';
+
+  // ── Symbol Discovery ────────────────────────────────────────────────────────
+  if (symbol.includes(' ') || symbol.length > 10) {
+    const search = await yahooFinance.search(ticker, { newsCount: 0, quotesCount: 5 });
+    const topResult = search.quotes.find(q => q.isYahooFinance && (q.quoteType === 'EQUITY' || q.quoteType === 'ETF'));
+    if (topResult?.symbol) {
+      discoveredSymbol = topResult.symbol as string;
+      symbol = discoveredSymbol;
+      printResponseLine(c.blueBold(`🔍 Discovered Ticker: `) + c.white(`${String(topResult.shortname || topResult.longname)} (${c.blueBold(symbol)})`));
+    } else {
+      stopSpinner();
+      printResponseLine(c.red(`  ✗ Precise ticker for "${ticker}" not found. Try search_web instead.`));
+      throw new Error(`Ticker for "${ticker}" not found.`);
+    }
+  }
+
+  printResponseLine(c.whiteBold(`📈 Scrappy Stock Market Agent — ${symbol}`));
   printResponseLine(c.gray('Analyzing global financials and recent market shifts...'));
   console.log(c.blue('║') + '─'.repeat(getLayoutWidth() - 2) + c.blue('║'));
 
   try {
-    const symbol = ticker.toUpperCase();
-
     const progress = async (msg: string, percent: number) => {
       const width = getLayoutWidth();
       const barLength = Math.max(10, Math.floor(width / 4));
@@ -31,7 +107,21 @@ export async function runStock(ticker: string, options: { excel?: boolean, docx?
     };
 
     await progress('Fetching Financial Info...', 10);
-    const quote: any = await yahooFinance.quote(symbol);
+    let quote: any;
+    try {
+      quote = await yahooFinance.quote(symbol);
+    } catch {
+      // Second fallback search if direct quote fails for a single word
+      const search = await yahooFinance.search(symbol, { newsCount: 0, quotesCount: 5 });
+      const topResult = search.quotes.find(q => q.isYahooFinance && (q.quoteType === 'EQUITY' || q.quoteType === 'ETF'));
+      if (topResult?.symbol) {
+        symbol = topResult.symbol as string;
+        quote = await yahooFinance.quote(symbol);
+      } else {
+        throw new Error(`Quote not found for symbol: ${symbol}`);
+      }
+    }
+    
     const modules: any = await yahooFinance.quoteSummary(symbol, { modules: ['assetProfile', 'financialData', 'defaultKeyStatistics'] });
 
     await progress('Fetching Latest News...', 40);

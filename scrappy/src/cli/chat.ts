@@ -39,6 +39,9 @@ import {
   endResponse,
   printResponseLine,
   printScrappyResponse,
+  startLiveResponse,
+  printLiveChunk,
+  endLiveResponse,
 } from './ui';
 
 import { ScrappyAgent, AgentResponse } from '../agent/agent';
@@ -94,8 +97,9 @@ export async function runChat(): Promise<void> {
   // Show config info
   try {
     const cfg = loadConfig();
+    const { getOutputDir } = await import('../utils/paths');
     printInfo(`Using ${c.blueBold(cfg.provider)} › ${c.white(cfg.model)}`);
-    printInfo(`Output folder: ${c.lightBlue(path.join(os.homedir(), '.scrappy', 'output'))}`);
+    printInfo(`Output folder: ${c.lightBlue(getOutputDir())}`);
   } catch {
     printWarn('No config found. Run `scrappy setup` to configure your model.');
   }
@@ -110,6 +114,42 @@ export async function runChat(): Promise<void> {
     terminal: true,
   });
 
+  // ── Tool Interception Logic ──────────────────────────────────────────
+  agent.beforeToolExecute = async (tool, args): Promise<{ proceed: boolean; args?: any }> => {
+    const isFileTool = tool.startsWith('create_') || tool.startsWith('save_');
+    if (!isFileTool) return { proceed: true };
+
+    if (isSpinnerActive()) stopSpinner();
+    console.log();
+    console.log(c.yellow(c.bold('  ⚠️  PERMISSION REQUIRED')));
+    console.log(c.gray(`  Scrappy wants to use tool: `) + c.blueBold(tool));
+    
+    // 1. Permission
+    const confirm = await new Promise<string>(resolve => {
+      rl.question(c.white('  Confirm action? (Y/n): '), resolve);
+    });
+    if (confirm.toLowerCase() === 'n') {
+      console.log(c.red('  Action cancelled by user.'));
+      return { proceed: false };
+    }
+
+    // 2. Path
+    const defaultDir = path.join(process.cwd(), 'scrappy_output');
+    const userPath = await new Promise<string>(resolve => {
+      rl.question(c.white(`  Where to save? [Enter for ${c.blue(defaultDir)}]: `), resolve);
+    });
+
+    const finalDir = userPath.trim() || defaultDir;
+    console.log(c.green(`  Using path: ${finalDir}`));
+    
+    // Update args with finalDir
+    const newArgs = { ...args, folderName: finalDir };
+
+    // Resume spinner since process() is still running
+    startSpinner('Scrappy is working…');
+    return { proceed: true, args: newArgs };
+  };
+
   rl.prompt();
 
   let inputBuffer = '';
@@ -119,11 +159,17 @@ export async function runChat(): Promise<void> {
     // If it's a very fast sequence of lines, it's a paste
     inputBuffer += (inputBuffer ? '\n' : '') + line;
 
+    if (inputBuffer.length > 500 && !isSpinnerActive()) {
+      updateSpinner(`📥 Processing large input (${inputBuffer.length} chars)...`);
+      if (!isSpinnerActive()) startSpinner('Processing large input...');
+    }
+
     if (inputTimeout) clearTimeout(inputTimeout);
 
     inputTimeout = setTimeout(async () => {
       const input = inputBuffer.trim();
       inputBuffer = '';
+      if (isSpinnerActive()) stopSpinner();
 
       if (!input) {
         rl.prompt();
@@ -203,8 +249,7 @@ export async function runChat(): Promise<void> {
           let fullText = '';
           let currentThoughtTotal = 0;
 
-          let currentLine = '';
-          startResponse();
+          startLiveResponse();
 
           for await (const chunk of response.stream) {
             if (chunk.type === 'thought') {
@@ -215,23 +260,12 @@ export async function runChat(): Promise<void> {
               
               if (chunk.text) {
                 fullText += chunk.text;
-                currentLine += chunk.text;
-
-                // If we have a newline, print the line(s)
-                if (currentLine.includes('\n')) {
-                  const lines = currentLine.split('\n');
-                  currentLine = lines.pop() || ''; // Keep the last partial line
-                  for (const l of lines) {
-                    printResponseLine(l);
-                  }
-                }
+                printLiveChunk(chunk.text);
               }
             }
           }
           
-          // Print remaining text
-          if (currentLine) printResponseLine(currentLine);
-          endResponse();
+          endLiveResponse();
 
           response.text = fullText;
         } else if (response.text) {
@@ -262,7 +296,7 @@ export async function runChat(): Promise<void> {
 
       rl.resume();
       rl.prompt();
-    }, 50); // Paste buffer timeout
+    }, 200); // Paste buffer timeout (increased for reliability)
   });
 
   rl.on('close', () => {
@@ -273,8 +307,11 @@ export async function runChat(): Promise<void> {
 
   // Handle Ctrl+C gracefully
   rl.on('SIGINT', () => {
+    rl.pause();
+    if (isSpinnerActive()) stopSpinner();
     console.log();
-    console.log(c.blue('\n  👋 Goodbye! Use `scrappy` to start again.'));
+    console.log(c.blue('  🌌 Cosmic adventure paused. Goodbye!'));
+    console.log();
     process.exit(0);
   });
 }

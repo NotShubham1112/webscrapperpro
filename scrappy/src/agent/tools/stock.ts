@@ -253,7 +253,8 @@ async function scrapeYahooHistory(symbol: string, range: string): Promise<StockR
 // ─── Google Finance Fallback ────────────────────────────────────────────────
 
 async function scrapeGoogleQuote(symbol: string): Promise<StockQuote | null> {
-  const url = `${GOOGLE_FINANCE_URL}/${symbol.toUpperCase()}:${symbol.toUpperCase()}`;
+  // Try directly with the symbol (Google will handle most common US/Global tickers)
+  const url = `${GOOGLE_FINANCE_URL}/${symbol.toUpperCase()}`;
   let html: string;
 
   try {
@@ -493,9 +494,10 @@ export async function search_stock(args: {
       let link = titleEl.attr('href') ?? '';
 
       // Decode DuckDuckGo redirect URLs
-      if (link.startsWith('//duckduckgo.com/l/?')) {
+      if (link.startsWith('//duckduckgo.com/l/?') || link.startsWith('/l/?')) {
         try {
-          const u = new URL('https:' + link);
+          const uStr = link.startsWith('//') ? 'https:' + link : 'https://duckduckgo.com' + link;
+          const u = new URL(uStr);
           link = decodeURIComponent(u.searchParams.get('uddg') ?? link);
         } catch { /* keep as-is */ }
       }

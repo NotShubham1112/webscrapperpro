@@ -1,0 +1,2 @@
+[console_scripts]
+scrape-ai = scraper.cli:main
