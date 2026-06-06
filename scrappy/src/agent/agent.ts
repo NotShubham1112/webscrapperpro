@@ -5,8 +5,9 @@
  * The Agent is the brain of Scrappy.
  */
 
-import { getLLM, ChatMessage, ToolCallResult } from './llm';
+import { getLLM, LLM, ChatMessage, ToolCallResult } from './llm';
 import { executeTool, AVAILABLE_TOOLS, ToolResult } from './router';
+import type { ScrappyConfig } from '../utils/config';
 
 export interface AgentStreamChunk {
   type: 'thought' | 'content' | 'done';
@@ -54,14 +55,31 @@ CRITICAL GUIDELINES:
 
 Available tools: ${AVAILABLE_TOOLS.join(', ')}
 
+CHART RENDERING: When presenting structured numeric data (e.g., sales figures, stock prices, statistics), output it as a chart code block using this JSON format:
+
+\`\`\`chart-bar
+{"title": "Chart Title", "xKey": "label", "yKey": "value", "data": [{"label": "A", "value": 100}]}
+\`\`\`
+
+For multiple series, use yKey as an array:
+\`\`\`chart-bar
+{"title": "Revenue vs Costs", "xKey": "month", "yKey": ["revenue", "costs"], "data": [{"month": "Jan", "revenue": 100, "costs": 60}]}
+\`\`\`
+
 Always respond helpfully. If a tool fails, explain clearly and suggest an alternative.`;
   }
 
   async process(
     userMessage: string,
-    history: ChatMessage[]
+    history: ChatMessage[],
+    config?: ScrappyConfig
   ): Promise<AgentResponse> {
-    const llm = getLLM();
+    let llm: LLM;
+    try {
+      llm = getLLM(config);
+    } catch {
+      return { text: "No LLM configured. Open settings to configure your provider and model." };
+    }
 
     let toolCall: ToolCallResult;
     try {

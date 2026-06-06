@@ -1,5 +1,20 @@
 {
+  "name": "webscrapper",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run api --workspace=scrappy\" \"npm run dev --workspace=scrap/frontend\"",
+    "dev:frontend": "npm run dev --workspace=scrap/frontend",
+    "dev:backend": "npm run api --workspace=scrappy"
+  },
+  "workspaces": [
+    "scrappy",
+    "scrap/frontend",
+    "research-scraper"
+  ],
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "shadcn": "^4.10.0"
   }
 }
+

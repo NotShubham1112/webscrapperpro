@@ -157,11 +157,11 @@ class OpenRouterProvider extends LLMProvider {
 
 // ─── Groq ──────────────────────────────────────────────────────────────────
 
+// Latest production-ready Groq model IDs (used directly when no map entry exists)
 const GROQ_MODEL_MAP: Record<string, string> = {
-  'llama3-8b-groq':   'llama3-8b-8192',
   'mixtral-8x7b':     'mixtral-8x7b-32768',
-  'llama3-70b':       'llama3-70b-8192',
   'gemma-7b':         'gemma-7b-it',
+  'gemma2-9b':        'gemma2-9b-it',
 };
 
 class GroqProvider extends LLMProvider {
@@ -381,7 +381,7 @@ Respond with:
 /** Singleton factory — reuses the same instance per session */
 let _llm: LLM | null = null;
 export function getLLM(config?: ScrappyConfig): LLM {
-  if (!_llm) _llm = new LLM(config);
+  if (!_llm || config) _llm = new LLM(config);
   return _llm;
 }
 export function resetLLM(): void { _llm = null; }
